@@ -13,7 +13,7 @@ var runtime_error := false
 var heading: Label
 var anchor_keep_toggle: CheckBox
 
-func setup(model, mesh_renderer) -> void:
+func setup(model, mesh_renderer, solid: bool = false) -> void:
 	add_theme_stylebox_override("panel", preload("res://scripts/sandbox/procedural/procedural_theme.gd").box("192333", 12, 8, "40516a"))
 	object = model
 	renderer = mesh_renderer
@@ -60,6 +60,8 @@ func setup(model, mesh_renderer) -> void:
 	opacity.custom_minimum_size.x = 100
 	opacity.value_changed.connect(func(value: float): object.color.a = value; style_changed.emit(self))
 	appearance.add_child(opacity)
+	opacity_label.visible = not solid
+	opacity.visible = not solid
 	appearance.visible = not object.is_group
 	var tabs := TabContainer.new()
 	tabs.use_hidden_tabs_for_min_size = false
@@ -107,7 +109,7 @@ func setup(model, mesh_renderer) -> void:
 			section.add_child(error_label)
 			errors[key] = error_label
 	var apply := Button.new()
-	apply.text = "Apply expressions"
+	apply.text = "Apply & place shape" if solid else "Apply expressions"
 	apply.pressed.connect(func(): apply_requested.emit(self))
 	body.add_child(apply)
 	message = Label.new()

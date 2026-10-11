@@ -49,6 +49,7 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(sync_tab_resolution)
 	add_page(Playground.instantiate(), "Playground", false)
 	new_procedural()
+	add_page(preload("res://scripts/sandbox/projected_physics/demo.gd").new(), "3D Physics Demo", false)
 	activate(0)
 
 ## Visible tab surfaces distinguish the active workspace from inactive tabs.
@@ -121,6 +122,7 @@ func activate(index: int) -> void:
 		var page: Dictionary = pages[i]
 		var enabled := i == index
 		if not enabled and page["scene"].has_method("deactivate"): page["scene"].deactivate()
+		if enabled and page["scene"].has_method("activate"): page["scene"].activate()
 		page["host"].visible = enabled
 		page["host"].process_mode = Node.PROCESS_MODE_INHERIT if enabled else Node.PROCESS_MODE_DISABLED
 		page["viewport"].gui_disable_input = not enabled

@@ -54,10 +54,10 @@ const Mass = preload("res://scripts/core/physics/mass_properties_4d.gd")
 var simulation = Session.new()
 var id = simulation.add_geometry(Box.new(), {"position":{"Y":4}})
 simulation.configure_body(id, "dynamic", Vector4.ZERO, {
-    "mass":2.0,
-    "restitution":0.1,
-    "friction":0.6,
-    "mass_properties":Mass.uniform_box(2.0, Vector4(2,2,2,2))
+	"mass":2.0,
+	"restitution":0.1,
+	"friction":0.6,
+	"mass_properties":Mass.uniform_box(2.0, Vector4(2,2,2,2))
 })
 simulation.set_gravity(Vector4(0,-9.81,0,0))
 simulation.seek(1.0)
