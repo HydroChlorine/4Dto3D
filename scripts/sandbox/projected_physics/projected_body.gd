@@ -6,6 +6,11 @@ const Math4D = preload("res://scripts/core/math/transform_4d.gd")
 var view_rotation := Math4D.identity()
 var camera_4d := preload("res://scripts/core/math/camera_projection_4d.gd").new()
 var held := false
+## Mass at uniform grab size 1. Camera deformation does not redefine density.
+var base_mass := 1.0:
+	set(value):
+		base_mass = maxf(value, 0.01)
+		update_mass()
 var size_multiplier := 1.0
 var rendered_size := -1.0
 var local_points := PackedVector3Array()
@@ -78,7 +83,7 @@ func update_geometry(time: float, reset_pose: bool = false) -> bool:
 	return true
 
 func refresh_freeze() -> void:
-	freeze = held or fixed or suspended or not valid_volume
+	freeze = fixed or suspended or not valid_volume
 
 ## Native body scale stays identity. Bake uniform resizing into mesh and collider.
 func rebuild_solid() -> void:
@@ -92,6 +97,7 @@ func rebuild_solid() -> void:
 		collider.shape = shape
 	else:
 		collider.shape = null
+	update_mass()
 	rendered_size = size_multiplier
 	refresh_freeze()
 
@@ -103,3 +109,7 @@ func scaled_points(factor: float) -> PackedVector3Array:
 func set_size_multiplier(value: float) -> void:
 	size_multiplier = clampf(value, 0.05, 20.0)
 	if not is_equal_approx(rendered_size, size_multiplier): rebuild_solid()
+
+func update_mass() -> void:
+	mass = maxf(base_mass * pow(size_multiplier, 3.0), 0.000001)
+	if is_inside_tree(): sleeping = false

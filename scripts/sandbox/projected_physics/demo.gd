@@ -16,6 +16,7 @@ var editor: VBoxContainer
 var status: Label
 var panel: PanelContainer
 var camera: Camera3D
+var ground_visual: MeshInstance3D
 var pending: Array[Callable] = []
 var view_angles := Vector3.ZERO
 var view_sliders: Array[HSlider] = []
@@ -59,20 +60,23 @@ func reset_camera() -> void:
 func build_floor() -> void:
 	var floor_body := StaticBody3D.new()
 	floor_body.name = "Floor"
-	floor_body.position.y = -0.5
 	add_child(floor_body)
 	var mesh := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = Vector3(40, 1, 40)
-	mesh.mesh = box
+	var plane := PlaneMesh.new()
+	# Follow the camera horizontally; the visible edge stays beyond its far plane.
+	plane.size = Vector2.ONE * camera.far * 4.0
+	mesh.mesh = plane
+	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ground_visual = mesh
 	var material := StandardMaterial3D.new()
 	material.albedo_color = Color("526475")
 	material.roughness = 0.9
 	mesh.material_override = material
 	floor_body.add_child(mesh)
 	var collision := CollisionShape3D.new()
-	var shape := BoxShape3D.new()
-	shape.size = box.size
+	# Infinite half-space below y=0, independent of the visual plane's extent.
+	var shape := WorldBoundaryShape3D.new()
+	shape.plane = Plane(Vector3.UP, 0.0)
 	collision.shape = shape
 	floor_body.add_child(collision)
 
@@ -202,6 +206,19 @@ func add_shape(index: int, start: Vector4) -> void:
 	fixed.text = "Fixed in 3D (no falling)"
 	fixed.toggled.connect(func(value): pending.append(func(): body.fixed = value; body.refresh_freeze()))
 	card.body.add_child(fixed)
+	var mass_row := HBoxContainer.new()
+	card.body.add_child(mass_row)
+	var mass_label := Label.new()
+	mass_label.text = "Base mass (kg at size ×1)"
+	mass_row.add_child(mass_label)
+	var mass_field := SpinBox.new()
+	mass_field.min_value = 0.01
+	mass_field.max_value = 1000
+	mass_field.step = 0.1
+	mass_field.value = body.base_mass
+	mass_field.value_changed.connect(func(value): pending.append(func():
+		if is_instance_valid(body): body.base_mass = value))
+	mass_row.add_child(mass_field)
 	entries.append({"body": body, "card": card})
 	refresh_selector(entries.size() - 1)
 	update_suspension()
@@ -268,12 +285,12 @@ func _physics_process(delta: float) -> void:
 	if running and active: time += delta
 	for entry in entries:
 		if not entry.body.held: entry.body.update_geometry(time)
-	grabber.physics_tick()
+	grabber.physics_tick(delta)
 	grab_status.text = grabber.message
 	status.text = "t = %.2f s · %d shapes · gravity: −Y\nReset restores authored poses and clears 3D velocities." % [time, entries.size()]
 	if selected >= 0 and selected < entries.size():
 		var body = entries[selected].body
-		status.text += "\nLive 3D position: (%.2f, %.2f, %.2f) · size ×%.2f" % [body.position.x, body.position.y, body.position.z, body.size_multiplier]
+		status.text += "\nLive 3D position: (%.2f, %.2f, %.2f) · size ×%.2f · mass %.2f kg" % [body.position.x, body.position.y, body.position.z, body.size_multiplier, body.mass]
 		if not body.error.is_empty(): status.text += "\n" + body.error
 
 func build_grab_controls(box: VBoxContainer) -> void:
@@ -292,6 +309,24 @@ func build_grab_controls(box: VBoxContainer) -> void:
 	automatic.tooltip_text = "Aim at a surface; fit the entire held solid before it. Off: use wheel."
 	automatic.toggled.connect(func(value): grabber.automatic_distance = value)
 	row.add_child(automatic)
+	var strength_row := HBoxContainer.new()
+	box.add_child(strength_row)
+	var strength_label := Label.new()
+	strength_label.text = "Grab strength"
+	strength_row.add_child(strength_label)
+	var strength := HSlider.new()
+	strength.min_value = 0.25
+	strength.max_value = 4.0
+	strength.step = 0.05
+	strength.value = 1.0
+	strength.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	strength_row.add_child(strength)
+	var strength_value := Label.new()
+	strength_value.text = "1.00×"
+	strength_row.add_child(strength_value)
+	strength.value_changed.connect(func(value):
+		grabber.grab_strength = value
+		strength_value.text = "%.2f×" % value)
 	grab_status = Label.new()
 	grab_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	grab_status.text = grabber.message
@@ -359,3 +394,7 @@ Existing view sliders rotate this camera's frame."
 		settings.add_child(field)
 	button(controls, "Reset 4D camera position", func():
 		for axis in range(4): positions[axis].value = -8 if axis == 3 else 0)
+
+func _process(_delta: float) -> void:
+	if is_instance_valid(ground_visual):
+		ground_visual.position = Vector3(camera.position.x, 0, camera.position.z)

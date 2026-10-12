@@ -25,13 +25,13 @@ Live shape deformation does not provide surface velocities to the rigid-body sol
 
 ## Grabbing and perspective resizing
 
-Left-drag a visible solid in the viewport. A camera ray selects its native collider and keeps the hit point under the cursor. The mouse wheel changes holding distance (up = farther). Release to drop with zero velocity; Esc restores the pre-grab pose, size and velocities. Fixed objects remain fixed after release. Grabbing works while paused too. The selected object follows the click, and the sidebar reports its live native position and size multiplier.
+Left-drag a visible solid in the viewport. A camera ray selects its native collider and keeps the hit point under the cursor. The mouse wheel changes holding distance (up = farther). Release to drop with its current velocity; Esc restores the pre-grab pose, size and velocities. Fixed objects cannot be pulled. Resume the simulation to drag physically; pause freezes held bodies too. The selected object follows the click, and the sidebar reports its live native position and size multiplier.
 
 The mode menu offers constant-size dragging and perspective grabbing (default). Perspective grabbing maintains `size = initial_size * distance / initial_distance`, bounded to 0.05–20×. Size is baked into the hull vertices and collider rather than scaling a RigidBody3D node. It persists after release and subsequent 4D projection edits; Reset simulation returns it to 1×. Apply & place shape preserves this multiplier while replacing native pose/velocity.
 
-**Auto distance** aims a ray at the environment (excluding the held body), then attempts to fit the whole resized collider along that direction. Without a ray hit, its target distance is 40 units. Manual wheel distance is bounded to 0.3–80 units. Each move checks up to 12 intermediate poses/sizes and refines the first blocked interval. This avoids obvious placement through the floor/walls, but is a bounded heuristic rather than exact deforming-shape CCD. Very thin obstacles or initial penetrations may need further work after playtesting. Constant-size movement and resizing share this placement path.
+**Auto distance** aims a ray at the environment (excluding the held body), then attempts to fit the whole resized collider along that direction. Without a ray hit, its target distance is 40 units. Manual wheel distance is bounded to 0.3–80 units. Movement uses a capped damped spring force through the body center. Godot handles friction, sliding and pushing. Orientation is locked while held and its previous lock setting is restored on release. There is no mass-compensated gravity cancellation: heavy bodies lag and may be too heavy to lift. Resizing is rate-limited and checked separately with convex overlap queries; blocked growth does not stop movement. This does not provide exact swept-deformation collision detection.
 
-While held, a body's native physics and authored geometry sampling are suspended. Other bodies and time continue. On release, authored time expressions resume at the current t. Editing camera/view settings, applying fields, resetting, or leaving the tab cancels the grab. The grab changes native 3D pose and uniform size only; it does not infer a 4D position from the 3D mouse ray.
+While held, native physics remains active; only authored geometry sampling is suspended. Other bodies and time continue. On release, authored time expressions resume at the current t. Editing camera/view settings, applying fields, resetting, or leaving the tab cancels the grab. The grab changes native 3D pose and uniform size only; it does not infer a 4D position from the 3D mouse ray.
 
 ## Optional 4D perspective camera
 
@@ -44,3 +44,13 @@ An object entirely behind the near plane is hidden and loses its collider; it re
 Interaction code lives in `scripts/sandbox/projected_physics/grab_controller.gd`, independent of the control panel. It uses native Godot space queries during physics ticks. The body adapter owns one shared hull/collider rebuilding path for projection and grabbed scaling.
 
 Focused smoke verification: `tests/verify_projected_interaction.gd` covers fourth-depth scaling, near clipping, grab/resize/cancel/drop, collider scaling, hidden-object recovery, and reset. These checks do not replace mouse/visual playtesting.
+
+The ground collider is an infinite `WorldBoundaryShape3D` at Y=0. Its visible PlaneMesh follows the fly camera in XZ and extends beyond the camera far distance, so there is no reachable floor edge.
+
+## Grab mass and force
+
+Each shape has **Base mass (kg at size ×1)**. Current native mass is `base_mass * size_multiplier^3`; doubling uniform grab size makes it eight times heavier. Base mass is editable from 0.01 to 1000 kg. The sidebar reports live mass alongside native position and size. Reset returns size to one and therefore mass to base mass. Cancel restores the pre-grab size/mass.
+
+This rule applies to the uniform grab size multiplier, not every change in the projected hull's volume. Camera motion, authored 4D scale, and projection distortion do not silently change the base mass. Native inertia is recalculated from the resized collider and its mass.
+
+The assisted grab uses stiffness 900 and force cap 2000 N at 1 kg, adjustable with the Grab strength slider (0.25–4×). Above 1 kg, stiffness and force cap grow as mass^0.8. This makes heavy objects manageable while their response frequency still decreases with mass; native collision mass is unchanged. Damping is critical, and an implicit spring step stabilizes tiny resized masses. The body remains under gravity with its regular contact friction. Release preserves momentum; Esc restores pre-grab pose and velocities. Floor-slide and mass-scaling behavior have focused smoke coverage.

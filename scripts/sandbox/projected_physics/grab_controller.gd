@@ -2,6 +2,10 @@ extends Node
 ## Mouse interaction adapter. Queries run only from the host's physics tick.
 ## Changes native pose and a persistent uniform size multiplier, never 4D fields.
 signal picked(body)
+var spring_strength := 900.0
+var grab_strength := 1.0
+var max_force := 2000.0
+var original_lock_rotation := false
 var camera: Camera3D
 var held = null
 var perspective_resize := true
@@ -40,7 +44,7 @@ func ray() -> Dictionary:
 	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED: pixel = get_viewport().get_visible_rect().size * 0.5
 	return {"origin": camera.project_ray_origin(pixel), "direction": camera.project_ray_normal(pixel)}
 
-func physics_tick() -> void:
+func physics_tick(delta: float = 1.0 / 60.0) -> void:
 	if pending_cancel:
 		cancel()
 		pending_cancel = false
@@ -62,13 +66,19 @@ func physics_tick() -> void:
 			distance = clampf(distance * pow(1.12, wheel_steps), 0.3, 80.0)
 		wheel_steps = 0
 		var factor := clampf(initial_size * distance / initial_distance, 0.05, 20.0) if perspective_resize else initial_size
-		var target: Vector3 = r.origin + r.direction * distance - held.global_basis * (grab_local * factor)
-		move_safely(target, factor)
+		var growth_blocked := resize_toward(factor, delta)
+		var target: Vector3 = r.origin + r.direction * distance - held.global_basis * (grab_local * held.size_multiplier)
+		pull_toward(target, delta)
+		message = "Holding · %.2f kg · size ×%.2f%s" % [held.mass, held.size_multiplier, " · growth blocked" if growth_blocked else " · release to drop"]
+		if held.suspended: message = "Simulation paused · resume to drag physically"
 	if pending_release:
 		pending_release = false
 		release()
 
 func begin(body, hit: Vector3, origin: Vector3) -> void:
+	if body.fixed or not body.valid_volume:
+		message = "Fixed objects cannot be pulled. Disable Fixed to move this shape."
+		return
 	held = body
 	original_pose = body.global_transform
 	original_linear = body.linear_velocity
@@ -79,8 +89,10 @@ func begin(body, hit: Vector3, origin: Vector3) -> void:
 	distance = initial_distance
 	body.held = true
 	body.refresh_freeze()
-	body.linear_velocity = Vector3.ZERO
+	original_lock_rotation = body.lock_rotation
+	body.lock_rotation = true
 	body.angular_velocity = Vector3.ZERO
+	body.sleeping = false
 	picked.emit(body)
 
 func fits(pose: Transform3D, factor: float) -> bool:
@@ -93,37 +105,48 @@ func fits(pose: Transform3D, factor: float) -> bool:
 	query.margin = 0.0
 	return camera.get_world_3d().direct_space_state.intersect_shape(query, 1).is_empty()
 
-## Sweep sampled poses/sizes and refine first blocked interval. This is a bounded
-## placement heuristic, not exact continuous collision detection for deformation.
-func move_safely(target: Vector3, factor: float) -> void:
-	var start: Transform3D = held.global_transform
+## Limit resizing separately. Collision response, not a placement query, owns motion.
+func resize_toward(factor: float, delta: float) -> bool:
+	if held.suspended: return false
 	var old_size: float = held.size_multiplier
-	var accepted := 0.0
-	var blocked := false
-	for step in range(1, 13):
-		var fraction := step / 12.0
-		var candidate := Transform3D(start.basis, start.origin.lerp(target, fraction))
-		if fits(candidate, lerpf(old_size, factor, fraction)):
-			accepted = fraction
-			continue
-		var low := accepted
-		var high := fraction
-		for refinement in range(7):
+	# Rate-limit growth to avoid abrupt collider/inertia changes.
+	factor = clampf(factor, old_size * exp(-3.0 * delta), old_size * exp(3.0 * delta))
+	if factor <= old_size:
+		held.set_size_multiplier(factor)
+		return false
+	var low := old_size
+	var high := factor
+	if fits(held.global_transform, factor):
+		low = factor
+	else:
+		for refinement in range(8):
 			var middle := (low + high) * 0.5
-			candidate.origin = start.origin.lerp(target, middle)
-			if fits(candidate, lerpf(old_size, factor, middle)): low = middle
+			if fits(held.global_transform, middle): low = middle
 			else: high = middle
-		accepted = low
-		blocked = true
-		break
-	held.set_size_multiplier(lerpf(old_size, factor, accepted))
-	held.global_transform = Transform3D(start.basis, start.origin.lerp(target, accepted))
-	message = "Holding · size ×%.2f · %s" % [held.size_multiplier, "blocked by geometry" if blocked else "release to drop"]
+	held.set_size_multiplier(low)
+	return low < factor - 0.00001
+
+## Assisted grab, separate from collision mass. Sublinear force scaling makes
+## large objects manipulable while response frequency still falls with mass.
+## Critical damping and implicit stepping keep light bodies from oscillating.
+func spring_force(offset: Vector3, velocity: Vector3, body_mass: float, delta: float) -> Vector3:
+	var assistance := pow(maxf(body_mass, 1.0), 0.8)
+	var stiffness := spring_strength * grab_strength * assistance
+	var damping := 2.0 * sqrt(stiffness * body_mass)
+	var force_limit := max_force * grab_strength * assistance
+	var denominator := 1.0 + damping * delta / body_mass + stiffness * delta * delta / body_mass
+	return ((stiffness * offset - damping * velocity) / denominator).limit_length(force_limit)
+
+func pull_toward(target: Vector3, delta: float) -> void:
+	if held.suspended: return
+	held.sleeping = false
+	held.apply_central_force(spring_force(target - held.global_position, held.linear_velocity, held.mass, delta))
 
 func release() -> void:
 	if not is_instance_valid(held):
 		held = null
 		return
+	held.lock_rotation = original_lock_rotation
 	held.held = false
 	held.refresh_freeze()
 	held.sleeping = false

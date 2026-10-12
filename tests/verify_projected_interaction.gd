@@ -27,16 +27,18 @@ func verify() -> void:
 	var controller = demo.grabber
 	var original: Transform3D = body.global_transform
 	controller.begin(body, body.position, demo.camera.position)
-	assert(body.held and body.freeze)
-	controller.move_safely(body.position + Vector3.UP * 2, 1.5)
-	assert(body.position.y > original.origin.y + 1)
+	assert(body.held)
+	body.suspended = false
+	body.refresh_freeze()
+	controller.resize_toward(1.5, 0.2)
 	assert(is_equal_approx(body.size_multiplier, 1.5))
 	assert(body.collider.shape.points == body.scaled_points(1.5))
 	controller.cancel()
 	assert(not body.held and body.global_transform.is_equal_approx(original))
 	assert(is_equal_approx(body.size_multiplier, 1.0))
 	controller.begin(body, body.position, demo.camera.position)
-	controller.move_safely(body.position + Vector3.UP, 1.2)
+	controller.resize_toward(1.2, 0.2)
+	assert(is_equal_approx(body.mass, pow(1.2, 3)))
 	controller.release()
 	assert(not body.held and is_equal_approx(body.size_multiplier, 1.2))
 	demo.camera_4d.enabled = true
@@ -50,5 +52,26 @@ func verify() -> void:
 	assert(body.valid_volume and body.renderer.visible)
 	demo.reset_simulation()
 	assert(is_equal_approx(body.size_multiplier, 1.0))
+	# Native contact allows sideways motion across the infinite floor.
+	demo.set_physics_process(false)
+	body.suspended = false
+	body.refresh_freeze()
+	body.position = Vector3(-4, 1.01, 0)
+	controller.begin(body, body.position, demo.camera.position)
+	assert(not body.freeze and body.lock_rotation)
+	var start_x: float = body.position.x
+	for i in range(90):
+		controller.pull_toward(Vector3(-1, 1, 0), 1.0 / 60.0)
+		await physics_frame
+	assert(body.position.x > start_x + 1.0, "Held body slides along floor")
+	assert(body.position.y > 0.8, "Native contact prevents floor penetration")
+	controller.release()
+	assert(not body.lock_rotation)
+	var light = controller.spring_force(Vector3.RIGHT, Vector3.ZERO, 1, 1.0/60.0)
+	var heavy = controller.spring_force(Vector3.RIGHT, Vector3.ZERO, 10, 1.0/60.0)
+	assert(light.length() > heavy.length() / 10.0, "Heavy object accelerates less")
+	body.base_mass = 3
+	body.set_size_multiplier(2)
+	assert(is_equal_approx(body.mass, 24))
 	print("Interaction smoke passed: perspective, near clipping, drag, resize, cancel, drop, reset")
 	quit()
