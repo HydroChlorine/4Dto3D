@@ -2,6 +2,12 @@
 
 The runtime is `scripts/core/`. It requires Godot types, but no scene tree, controls, files, catalog, camera, renderer, or sandbox. The sandbox and a future game are separate clients of this API.
 
+## Related guides
+
+- [Projected 3D demo](PROJECTED_3D_DEMO.md): current user controls and two-stage projection pipeline.
+- [4D physics API](PHYSICS.md): authoritative physics modules, state, stepping and limitations.
+- [Collision backend contract](COLLISION_BACKEND.md): exchangeable 4D query implementations.
+
 ## Dependency direction
 
 ```text
@@ -24,8 +30,8 @@ Only `core/` may be imported by core scripts. IO and rendering can import core; 
 
 | Directory | Responsibilities |
 | --- | --- |
-| `core/math` | 5×5 homogeneous matrices, PRSA, 3×4 projection utility |
-| `core/geometry` | Vertex/edge/face data and procedural generators |
+| `core/math` | 5×5 matrices, PRSA, linear projection, embedded-camera projection and frustum clipping |
+| `core/geometry` | Vertex/edge/face data, generators and shared pure 3D convex hull topology |
 | `core/animation` | Restricted scalar expressions and transform tracks |
 | `core/scene` | Stable IDs, implicit group/geometry pairs, transforms, parenting, physics-to-scene adapter |
 | `core/physics` | Physics world API, body lifecycle/state layout, integration, replaceable collision backend |
@@ -143,15 +149,19 @@ Production callers now depend only on `core/physics/collision/collision_backend.
 
 `io/shape_json_exporter.gd` serializes supplied in-memory geometry plus committed geometry/group/projection source dictionaries into the existing `hi_4d.json` schema, then writes JSON. It has no sandbox dependencies and does not bake world transforms. The procedural controller owns the save dialog, checks for unapplied editor fields, and snapshots the selected shape before opening the dialog. Existing discovery and loading require no changes. `tests/verify_shape_export.gd` verifies edited geometry/topology and every transform/projection expression through the real loader; the procedural suite verifies both default tabs and subsequent tab closing/creation.
 
-### Physics development without a sandbox UI
+## Projected 3D demo boundary
 
-The Physics tab and its editor/controller have been removed. The app opens Playground
-and Procedural, and + creates additional Procedural tabs. Core physics remains
-independent and is developed through headless tests (see PHYSICS.md).
+The app opens Playground, Procedural 1 and 3D Physics Demo. The latter uses `sandbox/projected_physics` to adapt core geometry/math to native Godot RigidBody3D nodes. It does not use Session4D physics or recording. The old independent-4D-physics UI remains removed.
 
-The reusable projected hull builder and solid renderer remain under rendering/;
-`verify_physics.gd` retains geometric hull tests. Physics-UI-only branches were
-removed from the shared Procedural editor, and mixed tests retain their core checks.
+```text
+geometry + authored PRSA → shared source rotation → editable 3×4 matrix
+  → optional W=0 embedding → 4D camera → frustum clip → perspective divide
+  → centered convex mesh/collider → native Godot 3D physics pose → fly camera
+```
+
+`scripts/core/math/camera_projection_4d.gd` owns pure second-camera math, including the look-at frame and eight-plane clipping. `core/geometry/convex_hull_3d.gd` supplies reusable topology. Rendering converts points to meshes; the projected-body adapter owns native colliders, centering, grab size and mass. The grab controller applies native forces, and the demo controller owns UI/input coordination. Core math imports no sandbox/rendering modules.
+
+The authored 4D pose and accumulated native 3D motion are separate. Camera clipping changes the collider in this demo, unlike core 4D simulation where projection is presentation-only. [PROJECTED_3D_DEMO.md](PROJECTED_3D_DEMO.md) is the single behavioral reference for controls, formulas, defaults, limitations and focused checks.
 
 ## Physics module boundary
 
@@ -180,8 +190,8 @@ See [PHYSICS.md](PHYSICS.md) for standalone usage. `tools/verify_physics_isolati
 
 ### Unified advancement
 
-The host calls `session.advance(delta)` once per frame in either Procedural or
-Physics mode. Timeline controls have no independent update loop. The session
+Hosts using Session4D call `session.advance(delta)` once per frame. The native
+projected demo instead uses Godot physics ticks. Timeline controls have no independent update loop. The session
 coordinates playback → recording → physics, then uses the scene binding to evaluate
 transforms for display. Physics owns integration, recording owns snapshots, and the
 scene binding owns cached conversion between body motion and group transforms.
@@ -229,7 +239,7 @@ loader is needed, and the integrator remains independently callable.
 ### Linear contact impulses
 
 `physics/impulse_solver_4d.gd` consumes generic contact reports and modifies only
-dynamic linear velocities. It has no GJK/EPA, scene, UI or IO dependency. World
+dynamic linear and angular velocities via point impulses. It has no GJK/EPA, scene, UI or IO dependency. World
 exposes `resolve_impulses`; Session supplies prescribed-motion velocities and runs
 it before positional correction and snapshot capture. Restitution is body
 configuration. Angular response and friction are described below.

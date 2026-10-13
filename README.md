@@ -1,5 +1,14 @@
 # 4D → 3D Projection Lab
 
+## Documentation and workspaces
+
+- [Architecture and reusable core](docs/ARCHITECTURE.md): dependency boundaries, integration and runtime APIs.
+- [Projected 3D demo](docs/PROJECTED_3D_DEMO.md): current camera pipeline, frustum, controls, dragging, resizing and mass.
+- [4D physics](docs/PHYSICS.md): independent headless physics engine and its limitations.
+- [Collision backend contract](docs/COLLISION_BACKEND.md): replaceable 4D collision-query interface.
+
+Startup opens **Playground**, **Procedural 1**, and **3D Physics Demo**, with Playground selected. The **+** button adds procedural tabs. The demo uses native Godot **3D** physics on projected solids; it does not run the independent **4D** physics engine. The Playground/Procedural usage reference follows below.
+
 ## Runtime architecture
 
 The reusable Godot-dependent runtime is now in **`scripts/core/`**. It runs without sandbox UI, IO, asset files, cameras, or renderers. See [the architecture and API guide](docs/ARCHITECTURE.md) for the canonical directory map and a minimal in-memory example.
@@ -9,7 +18,7 @@ The reusable Godot-dependent runtime is now in **`scripts/core/`**. It runs with
 - `scripts/rendering/`: projection presentation and Godot mesh adapters.
 - `scripts/sandbox/`: Playground, procedural editor, controls, tabs, camera input.
 
-Older paths mentioned below remain compatibility aliases. New code should import the canonical paths from the architecture guide. Session mutations own history invalidation; inspector widgets are views of objects, not their owners. Simulation evaluates 4D transforms only, and projection occurs when displaying a frame.
+Older paths mentioned below remain compatibility aliases. New code should import the canonical paths from the architecture guide. Session mutations own history invalidation; inspector widgets are views of objects, not their owners. In the core/Procedural workflow, simulation operates in 4D and projection is presentation-only. In the projected demo, projection defines the native 3D collider; see its separate guide.
 
 Run `python3 tools/verify_core_isolation.py /path/to/godot` to verify dependency boundaries and execute the core in a minimal temporary project containing no other application code.
 
@@ -326,7 +335,7 @@ Changing position, rotation, scale, anchor, adding/removing shapes, or parenting
 
 `simulation_4d.gd` owns the stepping state. Its initial test-body API supports constant 4D linear velocity and six-plane angular velocity, with packed position, velocity, orientation, and angular-velocity snapshots. `simulation_recording.gd` owns history and restoration. `timeline.gd` owns playback controls, and `procedural_scene.gd` coordinates seeking and display.
 
-Current user-created shapes are still expression-driven: procedural transforms are recomputed at the selected time, while step validation checks expressions along unrecorded forward paths. Snapshots store dynamic state only, never vertex arrays or meshes. No dynamic-body UI, forces, gravity, or collision response has been introduced yet; the stepping API is the foundation for that next stage. Memory grows with recorded steps and dynamic-body count within the chosen range.
+Current user-created shapes are still expression-driven: procedural transforms are recomputed at the selected time, while step validation checks expressions along unrecorded forward paths. Snapshots store dynamic state only, never vertex arrays or meshes. Procedural has no dynamic-body editor. The independent core implements forces, gravity and collision response through its headless API; the separate projected demo exposes native 3D physics. Memory grows with recorded steps and dynamic-body count within the chosen range.
 
 Run `tests/verify_recording.gd` for constant-velocity integration, exact restoration, extending history after reverse playback, bounded seeks, trimming, edit invalidation, projection preservation, and fractional-step accumulation.
 
@@ -342,25 +351,18 @@ For overlapping objects, enable **Estimate penetration** in the collision inspec
 
 ### Swapping collision algorithms
 
-Collision checks use a **general, replaceable backend** at `scripts/core/physics/collision/collision_backend.gd`. Replace that entry with another implementation of the same query signature and documented result structure; the session and inspector continue to run. The default adapter uses GJK/EPA, but detection-only or other collision algorithms can omit unsupported measurements. See [the collision backend contract](docs/COLLISION_BACKEND.md) for exact inputs, required/optional outputs, replacement instructions, and the replacement test. Geometry transforms, playback, and rendering do not depend on the chosen algorithm.
+Collision checks use a **general, replaceable backend** at `scripts/core/physics/collision/collision_backend.gd`. Replace that entry with another implementation of the same query signature and documented result structure; the session and inspector continue to run. The default adapter uses box SAT for affine boxes and GJK/EPA otherwise, but detection-only or other collision algorithms can omit unsupported measurements. See [the collision backend contract](docs/COLLISION_BACKEND.md) for exact inputs, required/optional outputs, replacement instructions, and the replacement test. Geometry transforms, playback, and rendering do not depend on the chosen algorithm.
 
 ### Export a selected procedural shape
 
-Playground and Procedural 1 open on startup, with Playground selected. Playground remains unclosable; procedural tabs can be closed and the **+** button creates more.
+Playground, Procedural 1 and 3D Physics Demo open on startup, with Playground selected. Playground remains unclosable; procedural tabs can be closed and the **+** button creates more.
 
 In a procedural tab, select a shape and click **Export shape…** beneath its Parent selector. Apply pending Geometry and Group expression edits first. The save dialog starts in `data/custom_shapes`; choose a new `.json` filename. Restart the app to refresh shape selectors, then select the exported shape like any other custom shape. Files saved elsewhere can be copied into `data/custom_shapes` before restart. No separate import feature is needed.
 
 Export uses the same schema as `hi_4d.json`: name, local vertices/edges/faces, geometry position/rotation/scale/anchor expressions, the 3×4 projection expressions, and the selected shape's own group position/rotation/uniform-scale/anchor expressions. Applied expressions are saved as expressions, not evaluated at the current time. Only that shape is exported: no parent/children, inherited transforms, or fixed reparenting offsets. It loads under World and can therefore have a different world pose. This is a custom-shape asset, not a scene save: appearance, camera, timeline/history, and editor preferences such as the anchor-compensation checkbox are not part of this existing format.
 
-### Physics core development
+### Physics implementations
 
-The Physics UI has been removed while core features are developed. The app opens
-Playground and Procedural; + creates more Procedural tabs. Physics remains available
-through headless APIs and tests, including mass, gravity, forces and impulses.
-See [Physics API](docs/PHYSICS.md). Reusable hull rendering utilities are retained.
+The earlier UI for the independent 4D physics engine was removed; its headless APIs remain available. See [Physics API](docs/PHYSICS.md) for bodies, forces, contacts and integration.
 
-### Core physics module
-
-Physics is isolated under `scripts/core/physics`: `physics_world_4d.gd` coordinates body state and stepping, `body_4d.gd` defines state/layout, `integrator_4d.gd` implements motion, and `collision/` contains the replaceable backend. Scene hierarchy/PRSA mapping stays in `core/scene/physics_binding_4d.gd`. Playback records an injected runtime and does not import physics. Session composes these modules; it no longer implements body-state mapping or integration. See [Physics API and boundaries](docs/PHYSICS.md).
-
-**The collision-backend entry moved to `scripts/core/physics/collision/collision_backend.gd`.** Its replacement contract is unchanged. See PHYSICS.md for the current body-state and force APIs.
+The current **3D Physics Demo** is a separate adapter using Godot native physics on projected convex solids. Its two-stage camera, frustum, grabbing and mass behavior are documented in [the demo guide](docs/PROJECTED_3D_DEMO.md). Do not confuse its native simulation with Session4D recording or the replaceable 4D collision backend.
