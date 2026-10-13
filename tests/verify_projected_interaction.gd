@@ -7,17 +7,22 @@ func verify() -> void:
 	var projection = preload("res://scripts/core/math/camera_projection_4d.gd").new()
 	var math = preload("res://scripts/core/math/transform_4d.gd")
 	var rows: Array[Vector4] = [Vector4(1,0,0,0), Vector4(0,1,0,0), Vector4(0,0,1,0)]
-	var vertices: Array[Vector4] = [Vector4(1,2,3,0)]
+	var vertices: Array[Vector4] = [Vector4(1,2,3,2)]
 	projection.enabled = true
 	assert(projection.project(vertices, rows, math.identity())[0].is_equal_approx(Vector3(1,2,3)))
+	var mixed_rows: Array[Vector4] = [Vector4(1,0,0,1), Vector4(0,1,0,1), Vector4(0,0,1,1)]
+	assert(projection.project(vertices, mixed_rows, math.identity())[0].is_equal_approx(Vector3(3,4,5)))
 	projection.position.w = -4
 	assert(projection.project(vertices, rows, math.identity())[0].is_equal_approx(Vector3(2,4,6)))
-	projection.position.w = 1
+	# At W=0, look toward the embedded origin from +X: image loses one dimension.
+	projection.position = Vector4(8,0,0,0)
+	var edge_on = projection.project(vertices, rows, math.identity())
+	assert(absf(edge_on[0].x) < 0.0001)
+	projection.set_viewing_depth(-10)
+	assert(projection.position.is_equal_approx(Vector4(10,0,0,0)))
+	projection.look_at_target = false
+	projection.position = Vector4(0,0,0,1)
 	assert(projection.project(vertices, rows, math.identity()).is_empty())
-	vertices = [Vector4(0,0,0,0), Vector4(1,0,0,2)]
-	var clipped = projection.project(vertices, rows, math.identity())
-	assert(clipped.size() == 2)
-	for p in clipped: assert(p.is_finite())
 	var demo = preload("res://scripts/sandbox/projected_physics/demo.gd").new()
 	root.add_child(demo)
 	demo.running = false
@@ -44,6 +49,7 @@ func verify() -> void:
 	demo.camera_4d.enabled = true
 	body.update_geometry(0)
 	assert(body.valid_volume)
+	demo.camera_4d.look_at_target = false
 	demo.camera_4d.position.w = 10
 	body.update_geometry(0)
 	assert(body.collider.shape == null and not body.renderer.visible)

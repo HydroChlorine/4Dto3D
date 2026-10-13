@@ -33,19 +33,17 @@ The mode menu offers constant-size dragging and perspective grabbing (default). 
 
 While held, native physics remains active; only authored geometry sampling is suspended. Other bodies and time continue. On release, authored time expressions resume at the current t. Editing camera/view settings, applying fields, resetting, or leaving the tab cancels the grab. The grab changes native 3D pose and uniform size only; it does not infer a 4D position from the 3D mouse ray.
 
-## Optional 4D perspective camera
+## Optional second-stage 4D camera
 
-Enable **4D perspective camera** beneath the shared view sliders. It starts at `(0,0,0,-8)`, looking along camera-space +W, with focal distance 8 and near depth 0.5. Change its X/Y/Z/W fields or drag the W slider to move in fourth-depth. The existing XW/YW/ZW view sliders rotate the world-to-camera frame. The normal fly camera still renders the resulting 3D scene; its movement is independent.
+The mode selector now offers matrix-only projection or **Matrix → 4D camera → 3D**. Both always apply authored 4D transforms, shared source rotations, and the editable per-shape 3×4 matrix. The camera mode embeds each resulting point `(u,v,s)` at `(u,v,s,0)` and projects that embedded shape through a separate 4D camera. No original fourth-depth survives stage one.
 
-The pure math component `scripts/core/math/camera_projection_4d.gd` takes transformed 4D vertices and the per-object matrix rows. In perspective mode it subtracts the camera position, applies the shared viewing rotation, clips the convex solid against `camera_w >= near_depth`, then multiplies the matrix-projected coordinates by `focal / camera_w`. Crossing vertex pairs provide near-plane intersection points without requiring 4D face/cell topology. In linear mode the camera position is inactive and the original matrix behavior is preserved.
+Default camera `(0,0,0,-8)` and focal 8 reproduce the matrix output exactly. Camera XYZW fields use embedded-space coordinates. Look at target is on by default; its target XYZ lies on W=0. Moving sideways while looking toward the target foreshortens the embedded shape. At W=0, looking from outside toward it yields an edge-on, lower-dimensional image; its volume collider is suspended. This is projection, not extraction of a cross-section.
 
-An object entirely behind the near plane is hidden and loses its collider; it recovers when it returns to view. A partially clipped object becomes a closed projected convex solid with a cap. Near-plane clipping avoids division by zero, but approaching the plane can still make objects large. The floor and gravity are unaffected. Reprojection preserves the accumulated native 3D physics offset/rotation, so this is a hybrid 4D-authored/3D-physics demo, not a fully 4D camera/player physics simulation. Large clipped vertex clouds can be expensive; use simple shapes for initial experiments.
+Viewing depth moves along this camera's own forward direction. With look-at enabled, it stops short of crossing the target. Reset places the camera eight units back along W from the target. Turning look-at off uses a fixed +W view. Shared XW/YW/ZW sliders act only on the original source before the matrix, not on the second camera. Matrix fields remain editable in both modes.
 
-Interaction code lives in `scripts/sandbox/projected_physics/grab_controller.gd`, independent of the control panel. It uses native Godot space queries during physics ticks. The body adapter owns one shared hull/collider rebuilding path for projection and grabbed scaling.
+Near-plane clipping occurs before perspective division. The final solid and collider use the same resulting convex hull. The existing native 3D physics pose is still applied afterward; it is not lifted back into the embedding. Ground and gravity remain native 3D. Dense hulls crossing the near plane can be expensive.
 
-Focused smoke verification: `tests/verify_projected_interaction.gd` covers fourth-depth scaling, near clipping, grab/resize/cancel/drop, collider scaling, hidden-object recovery, and reset. These checks do not replace mouse/visual playtesting.
-
-The ground collider is an infinite `WorldBoundaryShape3D` at Y=0. Its visible PlaneMesh follows the fly camera in XZ and extends beyond the camera far distance, so there is no reachable floor edge.
+Pure camera math lives in `scripts/core/math/camera_projection_4d.gd`. Smoke checks cover straight-on identity, matrix participation, depth scaling, edge-on collapse and local camera movement.
 
 ## Grab mass and force
 
@@ -54,3 +52,11 @@ Each shape has **Base mass (kg at size ×1)**. Current native mass is `base_mass
 This rule applies to the uniform grab size multiplier, not every change in the projected hull's volume. Camera motion, authored 4D scale, and projection distortion do not silently change the base mass. Native inertia is recalculated from the resized collider and its mass.
 
 The assisted grab uses stiffness 900 and force cap 2000 N at 1 kg, adjustable with the Grab strength slider (0.25–4×). Above 1 kg, stiffness and force cap grow as mass^0.8. This makes heavy objects manageable while their response frequency still decreases with mass; native collision mass is unchanged. Damping is critical, and an implicit spring step stabilizes tiny resized masses. The body remains under gravity with its regular contact friction. Release preserves momentum; Esc restores pre-grab pose and velocities. Floor-slide and mass-scaling behavior have focused smoke coverage.
+
+## Full camera frustum
+
+The optional second-stage camera now clips against all eight boundaries before perspective division: near, far, and ±X/±Y/±Z side planes. **FOV°** is shared across the three image directions (default 90°); **Far** defaults to 100. Focal remains output magnification. A valid depth range requires `0 < Near < Far`; an invalid range produces no solid.
+
+Clipping is performed on the embedded 3D convex solid, rebuilding its hull edges between plane cuts so new cap edges participate in subsequent clipping. This preserves partial intersections even when all original vertices are outside the final frustum. The pure hull utility is now shared in `scripts/core/geometry/convex_hull_3d.gd`; the rendering path retains a compatibility alias.
+
+The final visible solid and collider both shrink when clipped and disappear when fully outside. Linear matrix-only mode remains unclipped. `tests/verify_camera_frustum.gd` checks partial cuts, enclosing geometry, lateral and far rejection, and FOV bounds.

@@ -24,6 +24,9 @@ var view_matrix := Body.Math4D.identity()
 var camera_4d := preload("res://scripts/core/math/camera_projection_4d.gd").new()
 var grabber := preload("res://scripts/sandbox/projected_physics/grab_controller.gd").new()
 var grab_status: Label
+var camera_position_fields: Array[SpinBox] = []
+var camera_depth_slider: HSlider
+var camera_depth_label: Label
 
 func _ready() -> void:
 	var environment := WorldEnvironment.new()
@@ -184,6 +187,7 @@ func update_view_matrix() -> void:
 	view_matrix = rotation.rotation_matrix()
 	# Geometry mutation waits until the physics tick, including when paused.
 	for entry in entries: entry.body.view_rotation = view_matrix
+	sync_camera_position_controls()
 
 func add_shape(index: int, start: Vector4) -> void:
 	var model := Model.new(index)
@@ -199,6 +203,7 @@ func add_shape(index: int, start: Vector4) -> void:
 	var card := Card.new()
 	editor.add_child(card)
 	card.setup(model, body.renderer, true)
+	card.set_projection_editable(true)
 	card.apply_requested.connect(func(current): pending.append(func(): apply_card(current, body)))
 	card.style_changed.connect(func(_current): body.renderer.update_style(model))
 	card.remove_requested.connect(func(_current): pending.append(func(): remove_shape(body)))
@@ -230,7 +235,8 @@ func apply_card(card, body) -> void:
 		card.show_error(body.model.error_field, body.model.error)
 		return
 	card.clear_errors()
-	for key in card.fields: card.fields[key].text = body.model.sources[key]
+	for key in card.fields:
+		card.fields[key].text = body.model.sources[key]
 	# Applying explicitly places the shape at its authored pose, even if unchanged.
 	body.update_geometry(time, true)
 
@@ -333,25 +339,50 @@ func build_grab_controls(box: VBoxContainer) -> void:
 	box.add_child(grab_status)
 
 func build_camera_4d_controls(box: VBoxContainer) -> void:
-	var toggle := CheckBox.new()
-	toggle.text = "4D perspective camera"
-	toggle.tooltip_text = "Project through fourth-depth before native 3D rendering. Changes colliders too."
-	box.add_child(toggle)
+	var mode := OptionButton.new()
+	mode.add_item("Linear projection · per-shape matrix")
+	mode.add_item("Matrix → 4D camera → 3D")
+	mode.tooltip_text = "Optional camera views the matrix output embedded at W=0."
+	box.add_child(mode)
 	var controls := VBoxContainer.new()
 	controls.visible = false
 	box.add_child(controls)
-	toggle.toggled.connect(func(value):
+	mode.item_selected.connect(func(index):
 		grabber.cancel()
-		camera_4d.enabled = value
-		controls.visible = value)
+		camera_4d.enabled = index == 1
+		controls.visible = camera_4d.enabled
+		for entry in entries: entry.card.set_projection_editable(true))
 	var hint := Label.new()
-	hint.text = "Camera position in 4D · +W is viewing depth
-Existing view sliders rotate this camera's frame."
+	hint.text = "Camera position in embedded space · shape lies at W=0
+Shared sliders rotate the source before the matrix."
 	hint.add_theme_font_size_override("font_size", 14)
 	controls.add_child(hint)
+	var look := CheckBox.new()
+	look.text = "Look at target (on W=0)"
+	look.button_pressed = true
+	controls.add_child(look)
+	look.toggled.connect(func(value):
+		grabber.cancel()
+		camera_4d.look_at_target = value
+		sync_camera_position_controls())
+	var target_row := HBoxContainer.new()
+	controls.add_child(target_row)
+	for axis in range(3):
+		var label := Label.new()
+		label.text = "Target " + ["X", "Y", "Z"][axis]
+		target_row.add_child(label)
+		var field := SpinBox.new()
+		field.min_value = -100
+		field.max_value = 100
+		field.step = 0.1
+		target_row.add_child(field)
+		field.value_changed.connect(func(value):
+			grabber.cancel()
+			camera_4d.target[axis] = value
+			sync_camera_position_controls())
 	var row := HBoxContainer.new()
 	controls.add_child(row)
-	var positions: Array[SpinBox] = []
+
 	for axis in range(4):
 		var label := Label.new()
 		label.text = ["X", "Y", "Z", "W"][axis]
@@ -359,33 +390,41 @@ Existing view sliders rotate this camera's frame."
 		var field := SpinBox.new()
 		field.min_value = -100
 		field.max_value = 100
-		field.step = 0.25
+		field.step = 0.1
+		field.allow_greater = true
+		field.allow_lesser = true
 		field.value = camera_4d.position[axis]
 		field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		field.custom_minimum_size.x = 90
 		field.value_changed.connect(func(value):
 			grabber.cancel()
-			camera_4d.position[axis] = value)
+			camera_4d.position[axis] = value
+			sync_camera_position_controls())
 		row.add_child(field)
-		positions.append(field)
-	var depth := HSlider.new()
-	depth.min_value = -30
-	depth.max_value = 15
-	depth.step = 0.05
-	depth.value = -8
-	depth.tooltip_text = "Move the 4D camera along world W"
-	controls.add_child(depth)
-	depth.value_changed.connect(func(value): positions[3].value = value)
-	positions[3].value_changed.connect(func(value): depth.set_value_no_signal(value))
-	var settings := HBoxContainer.new()
+		camera_position_fields.append(field)
+	camera_depth_label = Label.new()
+	controls.add_child(camera_depth_label)
+	camera_depth_slider = HSlider.new()
+	camera_depth_slider.min_value = -30
+	camera_depth_slider.max_value = 30
+	camera_depth_slider.step = 0.05
+	camera_depth_slider.tooltip_text = "Move along the rotated fourth viewing axis, preserving lateral camera position."
+	controls.add_child(camera_depth_slider)
+	camera_depth_slider.value_changed.connect(func(value):
+		grabber.cancel()
+		camera_4d.set_viewing_depth(value, view_matrix)
+		sync_camera_position_controls())
+	sync_camera_position_controls()
+	var settings := GridContainer.new()
+	settings.columns = 4
 	controls.add_child(settings)
-	for property in ["focal", "near_depth"]:
+	for property in ["focal", "near_depth", "far_depth", "fov_degrees"]:
 		var label := Label.new()
-		label.text = "Focal" if property == "focal" else "Near depth"
+		label.text = {"focal": "Focal", "near_depth": "Near", "far_depth": "Far", "fov_degrees": "FOV°"}[property]
 		settings.add_child(label)
 		var field := SpinBox.new()
 		field.min_value = 0.1
-		field.max_value = 30 if property == "focal" else 5
+		field.max_value = {"focal": 30, "near_depth": 50, "far_depth": 10000, "fov_degrees": 175}[property]
 		field.step = 0.1
 		field.value = camera_4d.get(property)
 		field.value_changed.connect(func(value):
@@ -393,8 +432,23 @@ Existing view sliders rotate this camera's frame."
 			camera_4d.set(property, value))
 		settings.add_child(field)
 	button(controls, "Reset 4D camera position", func():
-		for axis in range(4): positions[axis].value = -8 if axis == 3 else 0)
+		grabber.cancel()
+		camera_4d.position = camera_4d.target + Vector4(0, 0, 0, -8)
+		sync_camera_position_controls())
 
 func _process(_delta: float) -> void:
 	if is_instance_valid(ground_visual):
 		ground_visual.position = Vector3(camera.position.x, 0, camera.position.z)
+
+## Rotating the view updates this readout without moving the world-space camera.
+func sync_camera_position_controls() -> void:
+	for axis in range(camera_position_fields.size()):
+		camera_position_fields[axis].set_value_no_signal(camera_4d.position[axis])
+	if camera_depth_slider == null: return
+	var depth: float = camera_4d.viewing_depth(view_matrix)
+	camera_depth_slider.set_block_signals(true)
+	camera_depth_slider.min_value = minf(-30, depth)
+	camera_depth_slider.max_value = -0.05 if camera_4d.look_at_target else maxf(30, depth)
+	camera_depth_slider.set_value_no_signal(depth)
+	camera_depth_slider.set_block_signals(false)
+	camera_depth_label.text = "Viewing depth: %.2f · back ← → forward" % depth

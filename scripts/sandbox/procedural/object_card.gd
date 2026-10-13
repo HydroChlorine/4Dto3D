@@ -12,6 +12,7 @@ var message: Label
 var runtime_error := false
 var heading: Label
 var anchor_keep_toggle: CheckBox
+var projection_hint: Label
 
 func setup(model, mesh_renderer, solid: bool = false) -> void:
 	add_theme_stylebox_override("panel", preload("res://scripts/sandbox/procedural/procedural_theme.gd").box("192333", 12, 8, "40516a"))
@@ -144,6 +145,7 @@ func clear_errors() -> void:
 ## Keep expression keys unchanged so saved drafts and evaluation use the same mapping.
 func build_projection_matrix(section: VBoxContainer) -> void:
 	var hint := Label.new()
+	projection_hint = hint
 	hint.text = "Columns: 4D input · Rows: 3D output"
 	section.add_child(hint)
 	var grid := GridContainer.new()
@@ -178,3 +180,12 @@ func build_projection_matrix(section: VBoxContainer) -> void:
 			error_label.hide()
 			cell.add_child(error_label)
 			errors[key] = error_label
+
+## Demo-only mode switch; ordinary procedural cards stay fully editable.
+func set_projection_editable(enabled: bool) -> void:
+	if projection_hint == null: return
+	projection_hint.text = "Columns: 4D input · Rows: 3D output" if enabled else "Inactive in perspective mode · saved for linear mode"
+	for key in fields:
+		if not key.begins_with("projection."): continue
+		fields[key].editable = enabled
+		fields[key].modulate = Color.WHITE if enabled else Color(1, 1, 1, 0.45)

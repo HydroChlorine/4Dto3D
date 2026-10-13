@@ -45,9 +45,10 @@ func update_geometry(time: float, reset_pose: bool = false) -> bool:
 	if projection == null:
 		error = model.projection_track.error
 		return false
+	var rows: Array[Vector4] = projection.rows
 	var vertices: Array[Vector4] = []
 	for vertex in model.shape.vertices: vertices.append(Math4D.apply(sample.matrix, vertex))
-	var projected := camera_4d.project(vertices, projection.rows, view_rotation)
+	var projected := camera_4d.project(vertices, rows, view_rotation)
 	if projected.is_empty():
 		# Entire hull behind the 4D near plane: never leave a stale collider.
 		valid_volume = false
@@ -56,7 +57,7 @@ func update_geometry(time: float, reset_pose: bool = false) -> bool:
 		last_projected.clear()
 		local_points.clear()
 		refresh_freeze()
-		error = "Outside the 4D camera near plane (no collider)."
+		error = "Outside the 4D viewing frustum, or invalid Near/Far range (no collider)."
 		return true
 	if projected == last_projected and not reset_pose:
 		if not is_equal_approx(rendered_size, size_multiplier): rebuild_solid()
