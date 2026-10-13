@@ -5,6 +5,12 @@ const Renderer = preload("res://scripts/rendering/solid_hull_renderer.gd")
 const Math4D = preload("res://scripts/core/math/transform_4d.gd")
 var view_rotation := Math4D.identity()
 var camera_4d := preload("res://scripts/core/math/camera_projection_4d.gd").new()
+## Source parts share one native body; graph composition stays in core Scene4D.
+var graph
+var node_id := 0
+var members: Array = []
+var parts: Array = []
+var absorbed := false
 var held := false
 ## Mass at uniform grab size 1. Camera deformation does not redefine density.
 var base_mass := 1.0:
@@ -37,34 +43,55 @@ func _ready() -> void:
 ## Called at physics ticks. Rebuild only when authored projected points change.
 ## Center the hull locally so native body rotation is around the projected solid.
 func update_geometry(time: float, reset_pose: bool = false) -> bool:
-	var sample = model.track.sample(time)
-	if sample == null:
-		error = model.track.error
+	if absorbed: return true
+	var state = graph.sample(time) if graph != null else null
+	if graph != null and state == null:
+		error = graph.error
 		return false
-	var projection = model.projection_track.sample(time)
-	if projection == null:
-		error = model.projection_track.error
-		return false
-	var rows: Array[Vector4] = projection.rows
-	var vertices: Array[Vector4] = []
-	for vertex in model.shape.vertices: vertices.append(Math4D.apply(sample.matrix, vertex))
-	var projected := camera_4d.project(vertices, rows, view_rotation)
-	if projected.is_empty():
-		# Entire hull behind the 4D near plane: never leave a stale collider.
-		valid_volume = false
-		collider.shape = null
-		renderer.hide()
-		last_projected.clear()
-		local_points.clear()
-		refresh_freeze()
-		error = "Outside the 4D viewing frustum, or invalid Near/Far range (no collider)."
-		return true
-	if projected == last_projected and not reset_pose:
+	var sources: Array = members if not members.is_empty() else [self]
+	var clouds: Array = []
+	var projected := PackedVector3Array()
+	for source in sources:
+		var sample = source.model.track.sample(time)
+		var projection = source.model.projection_track.sample(time)
+		if sample == null or projection == null:
+			error = source.model.track.error if sample == null else source.model.projection_track.error
+			return false
+		var matrix = state[graph.objects[source.node_id].leaf_id].world if graph != null else sample.matrix
+		var vertices: Array[Vector4] = []
+		for vertex in source.model.shape.vertices: vertices.append(Math4D.apply(matrix, vertex))
+		var cloud := camera_4d.project(vertices, projection.rows, view_rotation)
+		clouds.append(cloud)
+		projected.append_array(cloud)
+	var unchanged := parts.size() == clouds.size()
+	if unchanged:
+		for i in range(parts.size()):
+			if parts[i].source != sources[i] or parts[i].projected != clouds[i]: unchanged = false
+	if unchanged and not reset_pose:
+		for part in parts: part.renderer.update_style(part.source.model)
+		update_mass()
 		if not is_equal_approx(rendered_size, size_multiplier): rebuild_solid()
 		return true
 	var center := Vector3.ZERO
 	for point in projected: center += point
-	center /= projected.size()
+	if not projected.is_empty(): center /= projected.size()
+	# Keep each convex part distinct, including during clipping and resizing.
+	while parts.size() > clouds.size():
+		var old: Dictionary = parts.pop_back()
+		old.collider.shape = null
+		old.renderer.queue_free()
+		old.collider.queue_free()
+	for i in range(clouds.size()):
+		if i >= parts.size():
+			var visual = renderer if i == 0 else Renderer.new()
+			var collision = collider if i == 0 else CollisionShape3D.new()
+			if i != 0:
+				add_child(visual)
+				add_child(collision)
+			parts.append({"renderer": visual, "collider": collision})
+		var points := PackedVector3Array()
+		for point in clouds[i]: points.append(point - center)
+		parts[i].merge({"source": sources[i], "projected": clouds[i], "points": points}, true)
 	local_points.clear()
 	for point in projected: local_points.append(point - center)
 	rebuild_solid()
@@ -84,20 +111,23 @@ func update_geometry(time: float, reset_pose: bool = false) -> bool:
 	return true
 
 func refresh_freeze() -> void:
-	freeze = fixed or suspended or not valid_volume
+	freeze = absorbed or fixed or suspended or not valid_volume
 
 ## Native body scale stays identity. Bake uniform resizing into mesh and collider.
 func rebuild_solid() -> void:
-	if local_points.is_empty(): return
-	var scaled := scaled_points(size_multiplier)
-	renderer.render(model, scaled)
-	valid_volume = renderer.hull.dimension == 3
-	if valid_volume:
-		var shape := ConvexPolygonShape3D.new()
-		shape.points = scaled
-		collider.shape = shape
-	else:
-		collider.shape = null
+	valid_volume = false
+	for part in parts:
+		var scaled := PackedVector3Array()
+		for point in part.points: scaled.append(point * size_multiplier)
+		part.renderer.visible = not absorbed and not scaled.is_empty()
+		part.collider.shape = null
+		if scaled.is_empty(): continue
+		part.renderer.render(part.source.model, scaled)
+		if part.renderer.hull.dimension == 3 and not absorbed:
+			var shape := ConvexPolygonShape3D.new()
+			shape.points = scaled
+			part.collider.shape = shape
+			valid_volume = true
 	update_mass()
 	rendered_size = size_multiplier
 	refresh_freeze()
@@ -112,5 +142,41 @@ func set_size_multiplier(value: float) -> void:
 	if not is_equal_approx(rendered_size, size_multiplier): rebuild_solid()
 
 func update_mass() -> void:
-	mass = maxf(base_mass * pow(size_multiplier, 3.0), 0.000001)
-	if is_inside_tree(): sleeping = false
+	var total := base_mass
+	if not members.is_empty():
+		total = 0.0
+		for source in members: total += source.base_mass
+	var desired := maxf(total * pow(size_multiplier, 3.0), 0.000001)
+	if not is_equal_approx(mass, desired):
+		mass = desired
+		if is_inside_tree(): sleeping = false
+
+## Child adapters retain authoring settings but own no active native colliders.
+func set_absorbed(value: bool) -> void:
+	if absorbed == value: return
+	absorbed = value
+	if value: members.clear()
+	for part in parts:
+		part.collider.shape = null
+		part.renderer.hide()
+	parts.clear()
+	# First renderer/collider are retained for editor references.
+	for child in get_children():
+		if (child is CollisionShape3D or child is Renderer) and child != renderer and child != collider:
+			child.queue_free()
+	initialized = false
+	valid_volume = false
+	refresh_freeze()
+
+## Resizing queries the compound pieces, never a hull spanning the gaps.
+func scaled_collision_parts(factor: float) -> Array:
+	var result: Array = []
+	for part in parts:
+		if part.collider.shape == null: continue
+		var points := PackedVector3Array()
+		for point in part.points: points.append(point * factor)
+		result.append(points)
+	return result
+
+func select_part(source) -> void:
+	for part in parts: part.renderer.set_selected(part.source == source)

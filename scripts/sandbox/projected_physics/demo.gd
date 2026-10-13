@@ -6,6 +6,8 @@ const Card = preload("res://scripts/sandbox/procedural/object_card.gd")
 const Body = preload("res://scripts/sandbox/projected_physics/projected_body.gd")
 const Catalog = preload("res://scripts/io/shape_catalog.gd")
 const UITheme = preload("res://scripts/sandbox/procedural/procedural_theme.gd")
+var graph := preload("res://scripts/core/scene/scene_4d.gd").new()
+var tree_box: VBoxContainer
 var entries: Array = []
 var selected := -1
 var time := 0.0
@@ -134,7 +136,15 @@ func build_ui() -> void:
 	button(add_row, "Add shape", func(): pending.append(func(): add_shape(catalog.selected, Vector4(0, 6, 0, 0))))
 	selector = OptionButton.new()
 	selector.item_selected.connect(select_shape)
+	# Keep the selector API for callers; the visible selector is now a hierarchy.
+	selector.hide()
 	box.add_child(selector)
+	var hierarchy_hint := Label.new()
+	hierarchy_hint.text = "4D hierarchy · drag onto a shape to parent, onto World to unparent.\nReparenting resets affected assemblies to authored poses."
+	hierarchy_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(hierarchy_hint)
+	tree_box = VBoxContainer.new()
+	box.add_child(tree_box)
 	editor = VBoxContainer.new()
 	box.add_child(editor)
 	status = Label.new()
@@ -193,22 +203,32 @@ func add_shape(index: int, start: Vector4) -> void:
 	var model := Model.new(index)
 	model.color = Color.from_hsv(fmod(entries.size() * 0.23 + 0.53, 1.0), 0.6, 0.9)
 	# Explicit demo defaults: custom geometry loads, its procedural presets do not.
-	model.initialize_defaults({"position": {"X": start.x, "Y": start.y, "Z": start.z, "W": start.w}}, time)
+	var id := graph.add_geometry(model.shape, {"position": {"X": start.x, "Y": start.y, "Z": start.z, "W": start.w}}, {}, time)
+	model.track = graph.objects[id].track
+	model.shape = graph.objects[id].geometry
+	var group_model := Model.new(-1)
+	group_model.track = graph.objects[id].group
+	group_model.node_name = model.node_name + " · Group"
 	var body := Body.new()
 	body.model = model
+	body.graph = graph
+	body.node_id = id
 	body.view_rotation = view_matrix
 	body.camera_4d = camera_4d
 	add_child(body)
 	body.update_geometry(time, true)
+	var tabs := TabContainer.new()
+	editor.add_child(tabs)
 	var card := Card.new()
-	editor.add_child(card)
+	card.name = "Geometry"
+	tabs.add_child(card)
 	card.setup(model, body.renderer, true)
 	card.set_projection_editable(true)
 	card.apply_requested.connect(func(current): pending.append(func(): apply_card(current, body)))
-	card.style_changed.connect(func(_current): body.renderer.update_style(model))
+	card.style_changed.connect(func(_current): refresh_styles())
 	card.remove_requested.connect(func(_current): pending.append(func(): remove_shape(body)))
 	var fixed := CheckBox.new()
-	fixed.text = "Fixed in 3D (no falling)"
+	fixed.text = "Fixed assembly in 3D (root setting)"
 	fixed.toggled.connect(func(value): pending.append(func(): body.fixed = value; body.refresh_freeze()))
 	card.body.add_child(fixed)
 	var mass_row := HBoxContainer.new()
@@ -224,51 +244,131 @@ func add_shape(index: int, start: Vector4) -> void:
 	mass_field.value_changed.connect(func(value): pending.append(func():
 		if is_instance_valid(body): body.base_mass = value))
 	mass_row.add_child(mass_field)
-	entries.append({"body": body, "card": card})
+	var group_card := Card.new()
+	group_card.name = "Group"
+	tabs.add_child(group_card)
+	group_card.setup(group_model, body.renderer, true)
+	group_card.apply_requested.connect(func(current): pending.append(func(): apply_card(current, body, group_model)))
+	group_card.remove_requested.connect(func(_current): pending.append(func(): remove_shape(body)))
+	entries.append({"id": id, "body": body, "card": card, "group_card": group_card, "group_model": group_model, "tabs": tabs, "fixed": fixed})
+	update_assemblies()
 	refresh_selector(entries.size() - 1)
 	update_suspension()
 
-func apply_card(card, body) -> void:
+func apply_card(card, body, edit_model = null) -> void:
 	grabber.cancel()
 	if not is_instance_valid(body): return
-	if not body.model.apply_sources(card.draft(), time):
-		card.show_error(body.model.error_field, body.model.error)
+	if edit_model == null: edit_model = body.model
+	if not edit_model.apply_sources(card.draft(), time):
+		card.show_error(edit_model.error_field, edit_model.error)
 		return
 	card.clear_errors()
 	for key in card.fields:
-		card.fields[key].text = body.model.sources[key]
+		card.fields[key].text = edit_model.sources[key]
 	# Applying explicitly places the shape at its authored pose, even if unchanged.
-	body.update_geometry(time, true)
+	update_assemblies([root_id(body.node_id)])
 
 func remove_shape(body) -> void:
-	if grabber.held == body: grabber.cancel()
+	grabber.cancel()
+	var old_root := root_id(body.node_id)
+	if not graph.remove_object(body.node_id, time):
+		status.text = graph.error
+		return
 	for i in range(entries.size()):
 		if entries[i].body != body: continue
-		entries[i].card.queue_free()
-		body.freeze = true
+		entries[i].tabs.queue_free()
+		body.set_absorbed(true)
 		body.queue_free()
 		entries.remove_at(i)
+		# Promoted children may now be independent roots.
+		update_assemblies([old_root])
 		refresh_selector(mini(i, entries.size() - 1))
 		return
 
+func root_id(id: int) -> int:
+	while graph.entries[id].parent != 0: id = graph.entries[id].parent
+	return id
+
+## Composition is wholly 4D. Native rigid bodies only exist at assembly roots.
+func update_assemblies(reset_roots: Array = []) -> void:
+	for entry in entries:
+		entry.body.set_absorbed(root_id(entry.id) != entry.id)
+	for entry in entries:
+		if entry.body.absorbed: continue
+		var members: Array = [entry.body]
+		for child in entries:
+			if child.id != entry.id and root_id(child.id) == entry.id: members.append(child.body)
+		var changed: bool = members != entry.body.members
+		entry.body.members = members
+		if not entry.body.held:
+			entry.body.update_geometry(time, changed or entry.id in reset_roots)
+	refresh_styles()
+
+func refresh_styles() -> void:
+	var source = entries[selected].body if selected >= 0 and selected < entries.size() else null
+	for entry in entries:
+		if entry.body.absorbed: continue
+		for part in entry.body.parts: part.renderer.update_style(part.source.model)
+		entry.body.select_part(source)
+
+func reparent_node(id: int, parent: int) -> void:
+	pending.append(func():
+		if not graph.can_parent(id, parent): return
+		grabber.cancel()
+		var old_root := root_id(id)
+		if not graph.reparent(id, parent, time):
+			status.text = graph.error
+			return
+		update_assemblies([old_root, root_id(id)])
+		refresh_selector(selected))
+
 func refresh_selector(index: int) -> void:
 	selector.clear()
-	for i in range(entries.size()): selector.add_item("%s #%d" % [entries[i].body.model.node_name, i + 1])
+	for i in range(entries.size()): selector.add_item("%s #%d" % [entries[i].body.model.node_name, entries[i].id])
 	select_shape(index)
+
+func rebuild_tree() -> void:
+	for child in tree_box.get_children():
+		tree_box.remove_child(child)
+		child.queue_free()
+	add_tree_row(0, -1, 0)
+	add_tree_children(0, 1)
+
+func add_tree_children(parent: int, depth: int) -> void:
+	for i in range(entries.size()):
+		if graph.entries[entries[i].id].parent != parent: continue
+		add_tree_row(entries[i].id, i, depth)
+		add_tree_children(entries[i].id, depth + 1)
+
+func add_tree_row(id: int, index: int, depth: int) -> void:
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", depth * 20)
+	tree_box.add_child(margin)
+	var row := preload("res://scripts/sandbox/procedural/hierarchy_row.gd").new()
+	row.controller = self
+	row.node_id = id
+	row.text = "World" if id == 0 else ("▼ " if selected == index else "▶ ") + "%s #%d" % [entries[index].body.model.node_name, id]
+	row.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	row.pressed.connect(func(): select_shape(-1 if selected == index else index))
+	margin.add_child(row)
 
 func select_shape(index: int) -> void:
 	selected = index
 	if index >= 0: selector.select(index)
 	for i in range(entries.size()):
-		entries[i].card.visible = i == index
-		entries[i].body.renderer.set_selected(i == index)
+		entries[i].tabs.visible = i == index
+		entries[i].fixed.disabled = graph.entries[entries[i].id].parent != 0
+	refresh_styles()
+	rebuild_tree()
 
 func reset_simulation() -> void:
 	grabber.cancel()
 	time = 0.0
+	var roots: Array = []
 	for entry in entries:
 		entry.body.size_multiplier = 1.0
-		entry.body.update_geometry(time, true)
+		roots.append(entry.id)
+	update_assemblies(roots)
 
 func update_suspension() -> void:
 	for entry in entries:
@@ -289,13 +389,16 @@ func _physics_process(delta: float) -> void:
 	pending.clear()
 	for command in commands: command.call()
 	if running and active: time += delta
-	for entry in entries:
-		if not entry.body.held: entry.body.update_geometry(time)
+	update_assemblies()
 	grabber.physics_tick(delta)
 	grab_status.text = grabber.message
 	status.text = "t = %.2f s · %d shapes · gravity: −Y\nReset restores authored poses and clears 3D velocities." % [time, entries.size()]
 	if selected >= 0 and selected < entries.size():
 		var body = entries[selected].body
+		for entry in entries:
+			if entry.id == root_id(body.node_id):
+				body = entry.body
+				break
 		status.text += "\nLive 3D position: (%.2f, %.2f, %.2f) · size ×%.2f · mass %.2f kg" % [body.position.x, body.position.y, body.position.z, body.size_multiplier, body.mass]
 		if not body.error.is_empty(): status.text += "\n" + body.error
 

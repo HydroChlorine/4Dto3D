@@ -97,13 +97,15 @@ func begin(body, hit: Vector3, origin: Vector3) -> void:
 
 func fits(pose: Transform3D, factor: float) -> bool:
 	var query := PhysicsShapeQueryParameters3D.new()
-	var shape := ConvexPolygonShape3D.new()
-	shape.points = held.scaled_points(factor)
-	query.shape = shape
 	query.transform = pose
 	query.exclude = [held.get_rid()]
 	query.margin = 0.0
-	return camera.get_world_3d().direct_space_state.intersect_shape(query, 1).is_empty()
+	for points in held.scaled_collision_parts(factor):
+		var shape := ConvexPolygonShape3D.new()
+		shape.points = points
+		query.shape = shape
+		if not camera.get_world_3d().direct_space_state.intersect_shape(query, 1).is_empty(): return false
+	return true
 
 ## Limit resizing separately. Collision response, not a placement query, owns motion.
 func resize_toward(factor: float, delta: float) -> bool:

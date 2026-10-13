@@ -296,3 +296,5 @@ orientation estimate and matrix exponentials, with numerical energy error. The
 response solver caches inverse inertia only for the current pose. Sleeping is
 per-body, not island-based; fast motion is adaptive sampling, not exact TOI. Non-box
 manifolds and pathological glancing/oscillatory trajectories remain limitations.
+
+The projected demo reuses core `Scene4D` for authoring hierarchy and keep-world reparenting. Each root assembly maps to one native body with a separate convex collider per geometry leaf. Native 3D motion is not written back to the 4D graph. Geometry and Group editors remain presentation adapters; see [the demo guide](PROJECTED_3D_DEMO.md#4d-hierarchy-and-compound-assemblies).

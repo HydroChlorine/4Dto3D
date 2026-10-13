@@ -22,11 +22,23 @@ Leaving the tab cancels any grab and freezes its native bodies. Returning resume
 
 ## Shapes and editable fields
 
-Add shapes from the catalog; select one to show its editor. Custom JSON files supply geometry, but this demo uses its own initial transforms rather than importing their saved procedural presets. Remove shape removes its body and collider. Visibility is visual only.
+Add shapes from the catalog; select one to show its editor. Custom JSON files supply geometry, but this demo uses its own initial transforms rather than importing their saved procedural presets. Remove shape removes that geometry and promotes its children to its parent, preserving their authored 4D poses. Visibility is visual only.
 
 The geometry fields accept expressions in `t` (seconds): position XYZW, six rotation planes in degrees, scale, anchor, and a per-shape 3×4 projection matrix. Shared X↔W/Y↔W/Z↔W sliders rotate the source in that order before the matrix. At zero, the default matrix displays XYZ; X↔W alone at 90° displays WYZ.
 
-**Apply & place shape** commits the fields, restores that body's authored pose at the current t, and clears native linear/angular velocity—even when the values are unchanged. It preserves grab size. Thus applying Y=10 repeatedly places a fallen shape there again under the default projection. Fixed bodies do not fall and cannot be pulled.
+**Apply & place shape** commits the fields, restores that assembly's authored pose at the current t, and clears native linear/angular velocity—even when the values are unchanged. It preserves grab size. Thus applying Y=10 repeatedly places a fallen shape there again under the default projection. Fixed bodies do not fall and cannot be pulled.
+
+### 4D hierarchy and compound assemblies
+
+The shape selector is a tree. Drag a shape onto another to parent it; drag it onto **World** to unparent. Click a row to open its editor, and click it again to close. Each shape implicitly has two nodes, exposed as **Geometry** and **Group** tabs:
+
+- Geometry changes only that part's vertices, with its own projection and appearance.
+- Group changes that part and all descendants. Group transforms compose in 4D using the same core `Scene4D` as Procedural.
+- Reparenting preserves the authored 4D world transform through the core's full matrix offset. It leaves the editable Geometry fields unchanged and rejects cycles or singular parent inverses.
+
+Each root and all its descendants form **one native 3D rigid body**. Each geometry contributes a separate projected convex mesh and collider, preserving spaces between parts. The native rigid bodies are not parented to one another. Grabbing selects and moves the root assembly; select individual parts in the tree to edit them.
+
+Parenting/unparenting resets affected assemblies to their authored poses and clears their native velocities. It does not preserve a fallen or dragged 3D pose by converting it back to 4D. Apply resets the selected part's whole assembly. The root's Fixed checkbox controls the assembly; child Fixed controls are disabled. Base mass is specified per part and summed for the assembly, then multiplied by grab size cubed. Children retain their individual settings when detached.
 
 ### Authored pose versus simulated pose
 
@@ -41,14 +53,16 @@ For example, the default tesseract is authored at approximately (-2,5,0,0). Fall
 Matrix-only mode:
 
 ```text
-local 4D vertices → authored PRSA → shared source rotation
+local 4D vertices → Geometry PRSA → ancestor Group transforms/offsets
+→ shared source rotation
 → per-shape 3×4 matrix → 3D convex solid → native 3D body pose
 ```
 
 **Matrix → 4D camera → 3D** mode:
 
 ```text
-local 4D vertices → authored PRSA → shared source rotation
+local 4D vertices → Geometry PRSA → ancestor Group transforms/offsets
+→ shared source rotation
 → per-shape 3×4 matrix → embed (u,v,s) as (u,v,s,0)
 → camera coordinates → full frustum clipping → perspective division
 → 3D convex solid → native 3D body pose
@@ -56,7 +70,7 @@ local 4D vertices → authored PRSA → shared source rotation
 
 The ordinary Godot camera then renders the result to the screen. Matrix fields remain active in both modes. The second camera views the already-projected shape at W=0, not the original 4D solid. This is projection, not extraction of a cross-section.
 
-The same final convex solid defines the visible mesh and collider. Concavities, holes and disconnected pieces are filled by the single hull. A lower-dimensional projection remains visible but loses its volume collider and freezes. An entirely clipped object is hidden and loses its collider until it returns to view.
+Each part’s final convex solid defines its visible mesh and collider. Concavities within a single part are filled; gaps between separate parts are preserved. A lower-dimensional part remains visible but loses its volume collider; an entirely clipped part is hidden and loses its collider. The assembly freezes only when none of its parts has 3D volume.
 
 ## Second-stage 4D camera controls
 
@@ -96,21 +110,22 @@ A spring pulls the held body's center toward a cursor-derived target. The body s
 
 **Auto distance** chooses a target distance from a ray hit excluding the held body, or 40 units with no hit. Otherwise, the wheel chooses 0.3–80 units. Physical obstruction can prevent reaching that target; it is not guaranteed exact surface placement or exact apparent-size preservation while obstructed.
 
-**Base mass** is mass at grab size ×1. Current mass is `base_mass * size^3`; doubling size makes a body eight times heavier. Reset restores size ×1 and base mass. Camera projection, clipping and authored scale do not automatically recalculate mass from hull volume. Native inertia follows the collider and assigned mass.
+**Base mass** is mass at grab size ×1. Current mass is `sum(part_base_mass) * size^3`; doubling size makes a body eight times heavier. Reset restores size ×1 and base mass. Camera projection, clipping and authored scale do not automatically recalculate mass from hull volume. Native inertia follows the collider and assigned mass.
 
 **Grab strength** (0.25–4×) adjusts the assisted pull. Defaults are stiffness 900 and a 2000 N force cap at 1 kg. Above 1 kg, both grow as mass^0.8, so heavy objects remain manageable but follow more slowly. Critical damping and an implicit spring calculation stabilize light bodies. This assistance changes the grab, not native collision mass; gravity remains active.
 
-Authored geometry sampling pauses for the held shape. Other shapes and t continue; on release, expressions resume at current t. Camera/view edits, Apply, reset, and tab deactivation cancel the grab. No 3D mouse movement is interpreted as a unique 4D displacement.
+Authored geometry sampling pauses for the entire held assembly. Other shapes and t continue; on release, expressions resume at current t. Camera/view edits, Apply, reset, and tab deactivation cancel the grab. No 3D mouse movement is interpreted as a unique 4D displacement.
 
 ## Implementation ownership
 
 | File | Responsibility |
 | --- | --- |
+| `scripts/core/scene/scene_4d.gd` | Geometry ownership, Group/Geometry tracks and keep-world parenting |
 | `scripts/core/math/camera_projection_4d.gd` | Pure two-stage projection, look-at frame, depth movement and frustum clipping |
 | `scripts/core/geometry/convex_hull_3d.gd` | Pure convex topology shared by clipping and rendering |
 | `scripts/rendering/projected_hull_3d.gd` | Compatibility alias for the core hull utility |
 | `scripts/rendering/solid_hull_renderer.gd` | Opaque hull mesh and edge display |
-| `scripts/sandbox/projected_physics/projected_body.gd` | Native body adapter, cached projection, centered mesh/collider, size and mass |
+| `scripts/sandbox/projected_physics/projected_body.gd` | Native body adapter, cached projection, centered compound meshes/colliders, assembly size and mass |
 | `scripts/sandbox/projected_physics/grab_controller.gd` | Picking, spring pull, resize queries and grab lifecycle |
 | `scripts/sandbox/projected_physics/demo.gd` | World, floor, cameras, control panel and physics-tick coordination |
 | `scripts/sandbox/app_shell.gd` | Isolated viewports/worlds and tab activation |
@@ -123,6 +138,7 @@ Live deformation does not supply surface velocities to Godot. Abrupt collider ch
 
 Run headlessly with `godot --headless --path . --script <test>`:
 
+- `tests/verify_projected_hierarchy.gd`: parenting, transform ownership, compound colliders, mass, unparenting and removal.
 - `tests/verify_projected_demo.gd`: floor contact, pose edits, reset, projection changes and tab suspension.
 - `tests/verify_projected_interaction.gd`: camera math, grabbing, resizing, cancellation, mass and floor sliding.
 - `tests/verify_camera_frustum.gd`: partial clipping, enclosing geometry, FOV and side/far rejection.
