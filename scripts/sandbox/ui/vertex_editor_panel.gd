@@ -6,7 +6,6 @@ signal vertex_selected(index: int)
 signal reset_requested(all_vertices: bool)
 signal undo_requested
 signal redo_requested
-const Settings = preload("res://scripts/sandbox/ui/ui_settings.gd")
 const PAGE_SIZE := 16
 var shape
 var selected := 0
@@ -85,7 +84,7 @@ func rebuild_page() -> void:
 			var field := SpinBox.new()
 			field.allow_greater = true
 			field.allow_lesser = true
-			field.step = Settings.FIELD_STEP
+			field.step = 0.1
 			field.custom_minimum_size.x = 76
 			field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			field.value = shape.vertices[vertex][axis]

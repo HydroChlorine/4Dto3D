@@ -4,7 +4,6 @@ signal shape_selected(index: int)
 signal matrix_applied(rows: Array[Vector4])
 signal camera_reset_requested
 const Registry = preload("res://scripts/io/shape_catalog.gd")
-const Settings = preload("res://scripts/sandbox/ui/ui_settings.gd")
 var transform_panel: VBoxContainer
 var tabs: TabContainer
 var fields: Array[SpinBox] = []
@@ -21,7 +20,7 @@ func _ready() -> void:
 	panel.offset_bottom = -20
 	add_label(box, "4D → 3D Projection", 24)
 	caption = add_label(box, "")
-	add_label(box, "Choose a shape. Edit the matrix, then Apply.", 14)
+	add_label(box, "Choose a shape. Matrix changes update when you spin, press Enter, or leave a field.", 14)
 	selector = OptionButton.new()
 	for entry in Registry.ENTRIES:
 		selector.add_item(entry["name"])
@@ -53,14 +52,15 @@ func _ready() -> void:
 			var field := SpinBox.new()
 			field.allow_greater = true
 			field.allow_lesser = true
-			field.step = Settings.FIELD_STEP
+			field.step = 0.1
 			field.custom_minimum_size.x = 82
 			field.value = 1 if row == column else 0
 			fields.append(field)
 			grid.add_child(field)
+	for field in fields:
+		field.value_changed.connect(func(_value): emit_matrix())
 	var actions := HBoxContainer.new()
 	projection_content.add_child(actions)
-	button(actions, "Apply matrix", apply_matrix)
 	button(actions, "Reset matrix", reset_matrix)
 	button(actions, "Reset camera", func(): camera_reset_requested.emit())
 	status = add_label(projection_content, "", 14)
@@ -69,6 +69,10 @@ func _ready() -> void:
 func apply_matrix() -> void:
 	for field in fields:
 		field.apply()
+	emit_matrix()
+
+func emit_matrix() -> void:
+	for field in fields:
 		if not is_finite(field.value):
 			status.text = "Enter finite numbers in every field."
 			return
@@ -83,7 +87,7 @@ func reset_matrix() -> void:
 			var field := fields[row * 4 + column]
 			field.set_value_no_signal(1 if row == column else 0)
 			field.get_line_edit().text = str(field.value)
-	apply_matrix()
+	emit_matrix()
 
 func show_shape(shape, index: int) -> void:
 	selector.select(index)

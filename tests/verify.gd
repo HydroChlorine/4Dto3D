@@ -79,13 +79,13 @@ func verify() -> void:
 		check(scene.selected == last, "Selection signal")
 		var original: Vector4 = scene.editor.shape.vertices[last]
 		var field: SpinBox = scene.vertex_panel.fields[(last % 16) * 4]
-		field.get_line_edit().text = "4.375"
+		field.get_line_edit().text = "4.4"
 		field.apply()
-		check(is_equal_approx(scene.editor.shape.vertices[last].x, 4.375), "Page edit signal")
+		check(is_equal_approx(scene.editor.shape.vertices[last].x, 4.4), "Page edit signal")
 		scene.editor.reset_vertices(false, last)
 		check(scene.editor.shape.vertices[last] == original, "Reset generated coordinates")
 		scene.editor.undo()
-		check(is_equal_approx(scene.editor.shape.vertices[last].x, 4.375), "Undo reset")
+		check(is_equal_approx(scene.editor.shape.vertices[last].x, 4.4), "Undo reset")
 		scene.editor.reset_vertices(true, last)
 		check(scene.editor.shape.vertices == scene.editor.shape.original_vertices, "Reset all")
 		await process_frame
@@ -98,9 +98,8 @@ func verify() -> void:
 	var before = scene.projection.project(scene.editor.shape.vertices)
 	scene.editor.edit_coordinate(9, 0, 3)
 	check(scene.projection.project(scene.editor.shape.vertices) == before, "Discarded axis")
-	scene.projection_panel.fields[3].get_line_edit().text = "1"
-	scene.projection_panel.apply_matrix()
-	check(scene.projection.rows[0].w == 1, "Matrix apply signal")
+	scene.projection_panel.fields[3].value = 1
+	check(scene.projection.rows[0].w == 1, "Live matrix update")
 	check(scene.projection.project(scene.editor.shape.vertices)[0].x == 8, "Mixed projection")
 	scene.projection_panel.reset_matrix()
 	check(scene.projection.rows == matrix, "Reset matrix")
