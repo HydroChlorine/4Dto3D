@@ -1,6 +1,6 @@
 # Hybrid training: walk, inspect, return
 
-This is the combined first-/third-person version of all three training chambers. Everything added for this integration lives in `hybrid/` inside `4Dto3D-HydroChlorine`. The older `../4Dto3D` project and the upstream prototype files remain unchanged.
+This is the combined first-/third-person version of all three training chambers. Everything added for this integration lives in `hybrid/` inside the repository. The original third-person project is preserved separately; the upstream prototype files remain unchanged. The local checkout folder may be renamed without changing resource paths or the launcher.
 
 ## Run
 
